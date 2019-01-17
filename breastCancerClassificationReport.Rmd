@@ -1,0 +1,491 @@
+---
+title: "Breast Cancer Classification"
+author: "Carole Mrad"
+date: "January 15, 2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Introduction
+
+The present report covers the Breast Cancer Wisconsin (Diagnostic) DataSet (https://www.kaggle.com/uciml/breast-cancer-wisconsin-data/version/2) created by Dr. William H. Wolberg, physician at the University Of Wisconsin Hospital at Madison, Wisconsin,USA. The main objective for using this dataset is to build several machine learning classification models that predicts whether a breast cancer cell is benign or malignant.
+
+The primary cause of cancer death among women in less developed regions (324,000 deaths) is represented by breast cancer followed by 281,000 deaths for lung cancer (Jemal et al., 2011). Mammography (63%-97% correctness [Elmore et al., 2005]), FNA (Fine Needle Aspiration) with visual interpretation (65%-98% correctness [Giard and Hermans, 1992; Wang et al., 2017]) and surgical biopsy (around 100% correctness) characterize the commonly employed techniques for detecting breast cancer in early stages.
+
+This report focuses on the diagnosis technique that utilizes the FNA method. The features of the dataset are computed from a digitized image of a fine needle aspirate (FNA) of a breast mass. The machine learning models used in this report aims to create a classifier that provides a high accuracy level combined with a low rate of false-negatives (high sensitivity).
+
+
+### Used Dataset
+- [Wisconsin Breast Cancer Diagnostic Dataset] https://www.kaggle.com/uciml/breast-cancer-wisconsin-data/version/2
+
+```{r data_load_and_packages, warning=FALSE, error=FALSE, message=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(ggfortify)) install.packages("ggfortify", repos = "http://cran.us.r-project.org")
+if(!require(glmnet)) install.packages("glmnet", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(nnet)) install.packages("nnet", repos = "http://cran.us.r-project.org")
+if(!require(funModeling)) install.packages("funModeling", repos = "http://cran.us.r-project.org")
+
+# Loading the csv data file from my github account
+
+wbcd <- read.csv("https://raw.githubusercontent.com/cmrad/MLProject/master/data.csv")
+
+```
+
+
+### Used Libraries
+
+The following libraries were used in this report:
+```{r libs, warning=FALSE, error=FALSE, message=FALSE}
+
+library(tidyverse)
+library(caret)
+library(ggfortify)
+library(glmnet)
+library(randomForest)
+library(nnet)
+library(funModeling)
+```
+
+### Data Description
+
+The dataset's features describe characteristics of the cell nuclei present in the image. The features information are specified below:
+
+1. ID number 
+2. Diagnosis (M = malignant, B = benign) 
+
+3-32. Ten real-valued features are computed for each cell nucleus:
+
+    a. radius (mean of distances from center to points on the perimeter)
+    b. texture (standard deviation of gray-scale values)
+    c. perimeter
+    d. area 
+    e. smoothness (local variation in radius lengths) 
+    f. compactness (perimeter^2 / area - 1.0) 
+    g. concavity (severity of concave portions of the contour) 
+    h. concave points (number of concave portions of the contour)
+    i. symmetry
+    j. fractal dimension ("coastline approximation" - 1) 
+
+The mean, standard error and "worst" or largest (mean of the three largest values) of these features were computed for each image, resulting in 30 features. 
+
+### Aim & Objectives
+
+The primary objective of this report is to train machine learning models to predict whether a breast cancer cell is benign or malignant. Data transformation and dimension reduction techniques will be applied to reveal patterns in the dataset and create a more robust analysis.The optimal model will be selected based on its accuracy, sensitivity, and f1 score, amongst other factors. 
+
+# 2. Methodology & Analysis
+
+## General Data Information
+
+The dataset contains 569 observations with 32 variables. 
+```{r data_info}
+str(wbcd)
+head(wbcd)
+# summary statistics
+summary(wbcd)
+```
+
+
+## Next Step is to check if the dataset has any missing values:
+
+```{r check_missingValues}
+map_int(wbcd, function(.x) sum(is.na(.x)))
+```
+The dataset doesn't contain missing values.
+
+
+## Data Exploration & Visualization
+
+The diagnosis variable represent the target feature with levels "M" (malignant) and "B" (Benign). Its proportions are shown below:
+
+```{r diag_proportions}
+round(prop.table(table(wbcd$diagnosis)), digits = 2)
+```
+
+### Distribution of the Diagnosis Column
+
+```{r diag_distribution}
+options(repr.plot.width=4, repr.plot.height=4)
+ggplot(wbcd, aes(x=diagnosis))+geom_bar(fill="black",alpha=0.5)+theme_bw()+labs(title="Distribution of Diagnosis")
+```
+The plot and the computed proportions demonstrate that the target variable is slightly unbalanced.
+
+### Plotting Numerical Data
+
+The below plot shows all the histograms (distributions) for the numerical variables of the Breast Cancer Wisconsin (Diagnostic) DataSet.
+
+```{r numDataPlot}
+plot_num(wbcd %>%select(-id), bins=10)
+```
+
+The data frequency in most of the variables is normally distributed.
+
+### Exploring the variables'correlation
+
+Most machine learning  algorithms assume that the predictor variables are independent from each others. Hence, removing mutlicollinearity (i.e. remove highly correlated predictors) to achieve a more robust  anlysis will be done in the next section.
+
+Variables' Correlation Plot 
+
+```{r var_correlation}
+wbcd_corr <- cor(wbcd %>% select(-id, -diagnosis))
+
+corrplot::corrplot(wbcd_corr, order = "hclust", tl.cex = 0.8, addrect = 8)
+```
+
+The plot shows that indeed there are a number of variables that are highly correlated. In the next section the caret package is used to remove the highly correlated variables.
+
+## Data Transformation
+
+The findcorrelation() function from the  caret package is used here to remove highly correlated predictors based on whose correlation is above 0.9. This function employs a heuristic algorithm to determine which variable should be removed instead of selecting blindly.
+
+```{r data_transformation}
+wbcd2 <- wbcd %>% select(-findCorrelation(wbcd_corr, cutoff = 0.9))
+#Number of columns for the new data frame
+ncol(wbcd2)
+```
+
+The transformed dataset wbcd2 is 10 variables shorter.
+
+## Data Pre-Processing
+
+### Principle Component Analysis(PCA) 
+
+The id and diagnosis variables are removed followed by scaling and centering these variables.
+
+```{r PCA wbcd}
+preproc_pca_wbcd <- prcomp(wbcd %>% select(-id, -diagnosis), scale = TRUE, center = TRUE)
+summary(preproc_pca_wbcd)
+
+# Compute the proportion of variance explained
+pca_wbcd_var <- preproc_pca_wbcd$sdev^2
+pve_wbcd <- pca_wbcd_var / sum(pca_wbcd_var)
+cum_pve <- cumsum(pve_wbcd) # Cummulative percent explained
+pve_table <- tibble(comp = seq(1:ncol(wbcd %>% select(-id, -diagnosis))), pve_wbcd, cum_pve)
+
+ggplot(pve_table, aes(x = comp, y = cum_pve)) + 
+  geom_point() + 
+  geom_abline(intercept = 0.95, color = "red", slope = 0)
+
+```
+
+The above plot shows that 95% of the variance is explained with 10 PC's in the original dataset wbcd.
+
+#### PCA applied to the transformed dataset wbcd2
+
+```{r PCA wbcd2}
+preproc_pca_wbcd2 <- prcomp(wbcd2, scale = TRUE, center = TRUE)
+summary(preproc_pca_wbcd2)
+
+pca_wbcd2_var <- preproc_pca_wbcd2$sdev^2
+
+# proportion of variance explained
+pve_wbcd2 <- pca_wbcd2_var / sum(pca_wbcd2_var)
+cum_pve_wbcd2 <- cumsum(pve_wbcd2) # Cummulative percent explained
+pve_table_wbcd2 <- tibble(comp = seq(1:ncol(wbcd2)), pve_wbcd2, cum_pve_wbcd2)
+
+ggplot(pve_table_wbcd2, aes(x = comp, y = cum_pve_wbcd2)) + 
+  geom_point() + 
+  geom_abline(intercept = 0.95, color = "red", slope = 0)
+```
+
+The above plot shows that 95% of the variance is explained with 8 PC's in the transformed dataset wbcd2.
+
+Visualization of the most influential variables on the first 2 components:
+
+```{r vis_influentialVar}
+autoplot(preproc_pca_wbcd2, data = wbcd,  colour = 'diagnosis',
+         loadings = FALSE, loadings.label = TRUE, loadings.colour = "blue")
+```
+
+Visualization of the first 3 components
+```{r 1st3comp}
+wbcd_pcs <- cbind(as_tibble(wbcd$diagnosis), as_tibble(preproc_pca_wbcd2$x))
+GGally::ggpairs(wbcd_pcs, columns = 2:4, ggplot2::aes(color = value))
+```
+
+The first 3 principal components separate the two classes to some extent only; this is expected since the variance explained by these components is not large. 
+
+### Linear Discriminant Analysis (LDA)
+
+Now we will try LDA instead of PCA as it takes in consideration the different classes & could yield better results.
+
+``` {r lda}
+preproc_lda_wbcd <- MASS::lda(diagnosis ~., data = wbcd, center = TRUE, scale = TRUE)
+preproc_lda_wbcd
+
+# Dataframe of the LDA for visualization purposes
+predict_lda_wbcd <- predict(preproc_lda_wbcd, wbcd)$x %>% 
+  as_data_frame() %>% 
+  cbind(diagnosis = wbcd$diagnosis)
+```
+
+## Model Creation
+
+### Split the Dataset into Train (80%) & Test(20%) Sets
+
+The prediction of whether a breast cancer cell is benign or malignant will be achieved by building machine learning classification models on which the transformed Wisconsin Breast Cancer Diagnostic Dataset is partitioned into 2 sets: wbcd_training dataset used for building the algorithm and the wbcd_testing dataset used for testing. The testing set represents 20% of the wbcd data.
+
+```{r Split_data}
+set.seed(1815)
+wbcd3 <- cbind(diagnosis = wbcd$diagnosis, wbcd2)
+wbcd_sampling_index <- createDataPartition(wbcd3$diagnosis, times = 1, p = 0.8, list = FALSE)
+wbcd_training <- wbcd3[wbcd_sampling_index, ]
+wbcd_testing <-  wbcd3[-wbcd_sampling_index, ]
+
+# trainControl function is used to control the computational nuances of the train function
+wbcd_control <- trainControl(method="cv", #the resampling method k-fold cross validation
+                           number = 15,
+                           classProbs = TRUE,
+                           summaryFunction = twoClassSummary)
+```
+
+### Naive Bayes Model
+
+```{r naive_bayes_model, warning=FALSE, error=FALSE, message=FALSE}
+model_nb_wbcd <- train(diagnosis~.,
+                  wbcd_training,
+                  method="nb",
+                  metric="ROC",
+                  preProcess=c('center', 'scale'), #to normalize the data
+                  trace=FALSE,
+                  trControl=wbcd_control)
+
+prediction_nb_wbcd<-predict(model_nb_wbcd, wbcd_testing)
+
+# Check results
+cm_nb_wbcd<- confusionMatrix(prediction_nb_wbcd, wbcd_testing$diagnosis, positive = "M")
+cm_nb_wbcd
+```
+#### Needle plot of the Naive Bayes variable importance values
+```{r varImpplot_NB}
+plot(varImp(model_nb_wbcd), top = 10, main = "Naive Bayes")
+```
+
+The variables with the highest importance score represent the ones that yield the best prediction and contribute most to the model.Hence, a simple explanation would be that they form a part of the model's prediction power. Removing the top variable from the model will greatly reduce its prediction power.
+
+
+The top 4 variables in the Naive Bayes model are the perimeter_ worst,concave.points_ worst,area_worst and concave.points_mean.
+
+### Logistic Regression Model
+
+```{r Log_regression, warning=FALSE, error=FALSE, message=FALSE}
+model_logreg_wbcd <- train(diagnosis ~., data = wbcd_training, method = "glm", 
+                         metric = "ROC", 
+                         preProcess = c("scale", "center"), #to normalize the data
+                         trControl = wbcd_control)
+
+prediction_logreg_wbcd <- predict(model_logreg_wbcd, wbcd_testing)
+
+# Check results
+cm_logreg_wbcd <- confusionMatrix(prediction_logreg_wbcd, wbcd_testing$diagnosis, positive = "M")
+cm_logreg_wbcd
+
+# glmnet is used as it incorporates various linear algorithms
+# The below code could take some time
+
+model_glmnet_wbcd <- train(diagnosis ~., data = wbcd_training, method = "glmnet", 
+                         metric = "ROC", preProcess = c("scale", "center"), tuneLength = 20, 
+                         trControl = wbcd_control)
+
+prediction_glmnet_wbcd <- predict(model_glmnet_wbcd, wbcd_testing)
+
+# Check results
+cm_glmnet_wbcd <- confusionMatrix(prediction_glmnet_wbcd, wbcd_testing$diagnosis, positive = "M")
+cm_glmnet_wbcd
+
+```
+
+#### Needle plot of the glmnet variable importance values
+
+```{r varImpPlot_glmnet}
+plot(varImp(model_glmnet_wbcd), top = 10, main = "glmnet")
+```
+
+The top 4 variables in the glmnet model are area_se, texture_mean, area_worst, and perimeter_se.
+
+### Random Forest Model
+
+```{r random_forest_model}
+model_rf_wbcd <- train(diagnosis ~., data = wbcd_training,
+                     method = "rf", 
+                     metric = 'ROC', 
+                     trControl = wbcd_control)
+
+prediction_rf_wbcd <- predict(model_rf_wbcd, wbcd_testing)
+
+# Check results
+cm_rf_wbcd <- confusionMatrix(prediction_rf_wbcd, wbcd_testing$diagnosis, positive = "M")
+cm_rf_wbcd
+```
+#### Needle plot of the Random Forest variable importance values
+
+```{r varImpPlot RF}
+plot(varImp(model_rf_wbcd), top = 10, main = "Random forest")
+```
+
+The top 4 variables in the Random Forest model are the perimeter_ worst,area_worst, concave.points_ worst, and concave.points_mean.
+
+### K Nearest Neighbor (KNN) Model
+
+```{r knn_model}
+model_knn_wbcd <- train(diagnosis ~., data = wbcd_training, 
+                      method = "knn", 
+                      metric = "ROC", 
+                      preProcess = c("scale", "center"),#to normalize the data
+                      trControl = wbcd_control, 
+                      tuneLength =31)#to specify the number of possible k values to evaluate
+```
+
+#### KNN Model Plot
+```{r knnModel_plot}
+plot(model_knn_wbcd)
+```
+
+ROC was used to select the optimal model using the largest value.The above plot shows that the final value used for this model is k = 15 (best tuning parameter K).
+
+
+```{r knn_results }
+# Knn Model predictons and results
+prediction_knn_wbcd <- predict(model_knn_wbcd, wbcd_testing)
+cm_knn_wbcd <- confusionMatrix(prediction_knn_wbcd, wbcd_testing$diagnosis, positive = "M")
+cm_knn_wbcd
+```
+
+#### Needle plot of the KNN variable importance values
+
+```{r varImpPlot KNN}
+plot(varImp(model_knn_wbcd), top = 10, main = "KNN")
+```
+
+The top 4 variables in the KNN model are the perimeter_ worst,concave.points_ worst,area_worst and concave.points_mean.
+
+
+### Neural Network with PCA Model
+
+```{r nnet_pca_model}
+# The below code could take some time 
+
+model_nnetpca_wbcd <- train(diagnosis ~., wbcd_training, 
+                            method = "nnet", 
+                            metric = "ROC", 
+                            preProcess=c('center', 'scale', 'pca'), #to normalize the data
+                            tuneLength = 10, 
+                            trace = FALSE, 
+                            trControl = wbcd_control)
+
+prediction_nnetpca_wbcd <- predict(model_nnetpca_wbcd, wbcd_testing)
+
+# Check results
+cm_nnetpca_wbcd <- confusionMatrix(prediction_nnetpca_wbcd, wbcd_testing$diagnosis, positive = "M")
+cm_nnetpca_wbcd
+```
+
+#### Needle plot of the Neural Network with PCA variable importance values
+
+```{r VarImpPlot NNetPCA}
+plot(varImp(model_nnetpca_wbcd), top = 8, main = "Neural Network with PCA")
+```
+
+PC1, PC2, and PC8 represent the top 3 principal components in the Neural Network with PCA model.
+
+### Neural Network with LDA Model
+
+```{r nnet_lda_model}
+lda_training <- predict_lda_wbcd[wbcd_sampling_index, ]
+lda_testing <- predict_lda_wbcd[-wbcd_sampling_index, ]
+# The below code could take some time
+model_nnetlda_wbcd <- train(diagnosis ~., lda_training, 
+                          method = "nnet", 
+                          metric = "ROC", 
+                          preProcess = c("center", "scale"), #to normalize the data
+                          tuneLength = 10, 
+                          trace = FALSE, 
+                          trControl = wbcd_control)
+
+prediction_nnetlda_wbcd <- predict(model_nnetlda_wbcd, lda_testing)
+
+# Check results
+cm_nnetlda_wbcd <- confusionMatrix(prediction_nnetlda_wbcd, lda_testing$diagnosis, positive = "M")
+cm_nnetlda_wbcd
+```
+
+
+# 3. Results 
+
+## The models' evaluation results are presented below:
+
+```{r models_eval}
+model_list <- list(Naive_Bayes=model_nb_wbcd,Logisic = model_logreg_wbcd, glmnet = model_glmnet_wbcd,
+                   Random_Forest = model_rf_wbcd,KNN=model_knn_wbcd,
+                   Neural_with_LDA = model_nnetlda_wbcd,Neural_with_PCA = model_nnetpca_wbcd)
+models_results <- resamples(model_list)
+summary(models_results)
+
+bwplot(models_results, metric = "ROC")
+
+```
+
+Some models have high variability depending on the processed sample (Naive_Bayes & logistic regression). The Neural Network with LDA model achieve a great auc with some variability. The ROC metric measure the auc of the roc curve of each model; this metric is independent of any threshold.
+
+## Models' results with the testing dataset
+
+```{r models_test_results}
+
+# Prediction classes are obtained by default with a threshold of 0.5 which isn't ideal 
+# with an unbalanced dataset like this.
+
+cm_list <- list(cm_Naive_Bayes=cm_nb_wbcd,cm_RF = cm_rf_wbcd, cm_Logisic = cm_logreg_wbcd,
+                cm_KNN=cm_knn_wbcd,cm_nnet_LDA = cm_nnetlda_wbcd,cm_nnet_PCA = cm_nnetpca_wbcd)
+
+results <- sapply(cm_list, function(x) x$byClass) 
+results%>% knitr::kable()
+```
+
+## Optimal Models Results Overview
+
+The neural network model with LDA yields the optimal results for sensitivity (detection of breast cancer cases) along with a balanced accuracy and F1 score (which can be interpreted as a weighted average of the precision and recall) of 0.988 & 0.987, respectively.
+
+```{r top_results}
+cm_results_max <- apply(results, 1, which.is.max)
+
+output_report <- data.frame(metric=names(cm_results_max), 
+                            best_model=colnames(results)[cm_results_max],
+                            value=mapply(function(x,y) {results[x,y]}, 
+                                         names(cm_results_max), 
+                                         cm_results_max))
+rownames(output_report) <- NULL
+output_report
+```
+
+## Direct Accuracy 
+
+The direct accuracy of the chosen model (NNet with LDA) is 99.115%.
+
+```{r direct accuracy}
+paste0(round(mean(prediction_nnetlda_wbcd == wbcd_testing$diagnosis)*100, digits=4),"%")
+```
+
+# 4. Conclusion
+
+In this report several machine learning classification models were investigated and tested in an aim to select the optimal model that yields a high accuracy level combined with a low rate of false-negatives (high sensitivity). Sensitivity is a critical metric here as an incorrect determination that a patient doesn't have cancer implies that the patient won't be treated and hence the cancer will progress until diagnosed later.
+
+The Neural Network with LDA model had the optimal results for F1(0.987), sensitivity (0.976), and  balanced acccuracy(0.988).
+
+# References
+
+Elmore, J. G., Armstrong, K., Lehman, C. D., & Fletcher, S. W. (2005). Screening for breast cancer. Jama, 293(10), 1245-1256.
+
+Giard, R. W., & Hermans, J. O. (1992). The value of aspiration cytologic examination of the breast a statistical review of the medical literature. Cancer, 69(8), 2104-2110.
+
+Jemal, A., Bray, F., Center, M. M., Ferlay, J., Ward, E., & Forman, D. (2011). Global cancer statistics. CA: a cancer journal for clinicians, 61(2), 69-90.
+
+Wang, M., He, X., Chang, Y., Sun, G., & Thabane, L. (2017). A sensitivity and specificity comparison of fine needle aspiration cytology and core needle biopsy in evaluation of suspicious breast lesions: A systematic review and meta-analysis. The Breast, 31, 157-166.
+
+
+
